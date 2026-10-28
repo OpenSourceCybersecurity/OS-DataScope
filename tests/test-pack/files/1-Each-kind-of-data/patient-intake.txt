@@ -1,0 +1,6 @@
+Patient intake (synthetic)
+Name: Riley Placeholder
+DOB: 12/11/1968
+SSN: 512-48-3304
+Reason for visit: hypertension (I10), taking lisinopril.
+Card on file: 4012 8888 8888 1881

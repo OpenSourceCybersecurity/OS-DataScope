@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Read-only file system and SMB access. Nothing here writes to a file server. -->
+  <PropertyGroup>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="PdfPig" />
+    <PackageReference Include="SharpCompress" />
+    <PackageReference Include="System.Diagnostics.EventLog" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="DataScope.Scanner.Tests" />
+    <InternalsVisibleTo Include="DataScope.Api.Tests" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\DataScope.Core\DataScope.Core.csproj" />
+  </ItemGroup>
+
+  <!--
+    Text recognition (D129). Tesseract and Leptonica for Windows x64 come from the TesseractOCR package, downloaded
+    only for these two files: its .NET wrapper is not used. Their SHA-256 hashes are pinned below and checked on every
+    build. The English model is tessdata_fast, kept in third_party/tessdata. Both are Apache-2.0 (THIRD-PARTY-NOTICES.md).
+  -->
+  <ItemGroup>
+    <PackageDownload Include="TesseractOCR" Version="[5.5.2]" />
+  </ItemGroup>
+  <PropertyGroup>
+    <OcrPackageDir>$(NuGetPackageRoot)tesseractocr/5.5.2/x64/</OcrPackageDir>
+  </PropertyGroup>
+  <ItemGroup>
+    <OcrLibrary Include="$(OcrPackageDir)tesseract55.dll" Sha256="E9903623E901F2D754EB49EEA4DBFF229F599A8817055A3E3F1C292216670CA9" />
+    <OcrLibrary Include="$(OcrPackageDir)leptonica-1.85.0.dll" Sha256="64BB1D584BCE83DB5E5C3625F1857E4BC12993625699CABD0A9B8B76E393BD01" />
+    <None Include="@(OcrLibrary)" Link="ocr/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Visible="false" />
+    <None Include="../../third_party/tessdata/eng.traineddata" Link="tessdata/eng.traineddata" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Visible="false" />
+  </ItemGroup>
+  <Target Name="CheckOcrLibraries" BeforeTargets="CopyFilesToOutputDirectory">
+    <Error Condition="!Exists('%(OcrLibrary.Identity)')" Text="%(OcrLibrary.Identity) is missing. Run dotnet restore." />
+    <GetFileHash Files="@(OcrLibrary)" Algorithm="SHA256">
+      <Output TaskParameter="Items" ItemName="OcrLibraryHash" />
+    </GetFileHash>
+    <Error Condition="'%(OcrLibraryHash.FileHash)' != '%(OcrLibraryHash.Sha256)'" Text="%(OcrLibraryHash.Identity) does not have the pinned SHA-256 hash. Do not ship it." />
+  </Target>
+</Project>

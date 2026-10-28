@@ -1,0 +1,3 @@
+Deployment notes
+admin password: Winter2026-Synthetic!
+AWS key AKIAIOSFODNN7EXAMPLE for the backup bucket (the example key from AWS documentation)

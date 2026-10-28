@@ -1,0 +1,3 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Domain rules with no infrastructure dependencies. -->
+</Project>

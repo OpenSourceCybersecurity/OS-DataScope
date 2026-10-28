@@ -1,0 +1,2 @@
+Patient: Riley Placeholder  MRN 4471-2290
+Diagnosis: E11.9 type 2 diabetes mellitus. Prescribed metformin 500 mg. Follow-up A1C in three months.

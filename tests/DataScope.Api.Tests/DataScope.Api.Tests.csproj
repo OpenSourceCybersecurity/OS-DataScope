@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\DataScope.Api\DataScope.Api.csproj" />
+    <ProjectReference Include="..\..\src\DataScope.Worker\DataScope.Worker.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
+  </ItemGroup>
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Synthetic Windows events, shared with the Core tests. -->
+    <Compile Include="..\DataScope.Core.Tests\Activity\EventXml.cs" Link="Activity\EventXml.cs" />
+    <!-- A synthetic scanned form, shared with the Scanner tests (scripts/make-ocr-fixtures.py). -->
+    <None Include="..\DataScope.Scanner.Tests\Content\Fixtures\ocr\form-scan.png" Link="Fixtures\form-scan.png" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

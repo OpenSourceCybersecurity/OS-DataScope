@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Read-only Active Directory sync over LDAP. Never writes to the directory. -->
+  <ItemGroup>
+    <ProjectReference Include="..\DataScope.Core\DataScope.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="DataScope.ActiveDirectory.Tests" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="System.DirectoryServices.Protocols" />
+  </ItemGroup>
+</Project>

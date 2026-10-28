@@ -1,0 +1,19 @@
+From: hr@example.test
+To: payroll@example.test
+Subject: New hire paperwork
+Date: Thu, 1 Oct 2026 09:00:00 +0000
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="b1"
+
+--b1
+Content-Type: text/plain; charset=utf-8
+
+Please set up payroll.
+Social Security Number: 512-48-3325
+--b1
+Content-Type: text/plain; name="card.txt"
+Content-Disposition: attachment; filename="card.txt"
+Content-Transfer-Encoding: base64
+
+Q2FyZCBvbiBmaWxlOiA0MTExIDExMTEgMTExMSAxMTExDQo=
+--b1--

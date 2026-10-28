@@ -1,0 +1,653 @@
+name: CI
+
+# Changes to documentation alone don't build or test anything. The two Markdown files that ship in the install package
+# (the install guide and third-party notices) still run everything, so the package always carries the current ones.
+on:
+  pull_request:
+    paths: &code
+      - "**"
+      - "!docs/**"
+      - "!**.md"
+      - "docs/INSTALL-DATASCOPE.md"
+      - "docs/ADMIN-GUIDE.md"
+      - "THIRD-PARTY-NOTICES.md"
+  push:
+    branches: [main]
+    paths: *code
+  # Runs everything, the Windows jobs included, on any branch when started by hand from the Actions tab.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_NOLOGO: "1"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+
+jobs:
+  web:
+    name: Web UI (typecheck, test, build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+  dotnet-linux:
+    name: .NET on Linux (all tests, with PostgreSQL and Samba AD)
+    # Pinned: ubuntu-latest moved to 26.04, whose preinstalled PostgreSQL is 18, a version Data Scope does not support yet.
+    runs-on: ubuntu-24.04
+    env:
+      DATASCOPE_TEST_CONNECTION: Host=localhost;Database=postgres;Username=datascope;Password=ci-only
+    steps:
+      - uses: actions/checkout@v5
+      - name: Start the runner's own PostgreSQL 16 with a throwaway test role
+        # Preinstalled on the runner image, so no container is pulled (the public mirrors' anonymous quotas run out).
+        run: |
+          sudo systemctl start postgresql.service
+          pg_isready --host=localhost --timeout=60
+          # Throwaway server that lives only for this job; not a real credential.
+          sudo -u postgres psql -v ON_ERROR_STOP=1 -qc "CREATE ROLE datascope LOGIN SUPERUSER PASSWORD 'ci-only'"
+          psql "host=localhost dbname=postgres user=datascope password=ci-only" -tAc "SHOW server_version" | tee /dev/stderr | grep -q '^16\.'
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+      - run: dotnet restore --locked-mode
+      - run: dotnet format --verify-no-changes --no-restore
+      - run: dotnet build --no-restore -c Release
+      - name: No NuGet package with a known vulnerability (direct or transitive)
+        run: |
+          dotnet list package --vulnerable --include-transitive | tee "$RUNNER_TEMP/vulnerable.txt"
+          if grep -q "has the following vulnerable packages" "$RUNNER_TEMP/vulnerable.txt"; then exit 1; fi
+      # Pull requests skip the Samba AD directory tests and the scale benchmark to finish sooner (D150); main and
+      # manual runs keep them.
+      - name: Start a throwaway Samba AD domain controller for the directory tests
+        if: github.event_name != 'pull_request'
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq samba samba-ad-dc samba-ad-provision ldb-tools >/dev/null
+          sudo tests/lab/samba-dc.sh
+          # Synthetic lab domain on loopback only; the password is a fixed test value from samba-dc.sh.
+          echo "DATASCOPE_TEST_LDAP=Server=127.0.0.1;Port=389;User=Administrator@northwind.test;Password=Lab-only-Passw0rd!" >> "$GITHUB_ENV"
+      - name: Tesseract for the text recognition tests (Windows uses the copy that ships in the package)
+        run: sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libtesseract5 >/dev/null
+      - name: PostgreSQL client tools for the backup tests (preinstalled on the runner image)
+        run: pg_dump --version && pg_restore --version
+      - run: dotnet test --no-build -c Release --filter "${{ github.event_name == 'pull_request' && 'Category!=Benchmark&Category!=Directory' || 'Category!=Benchmark' }}"
+      - name: Scale benchmark (50,000 synthetic files; results in the job summary)
+        if: github.event_name != 'pull_request'
+        env:
+          DATASCOPE_BENCH_FILES: "50000"
+          DATASCOPE_BENCH_OUT: ${{ runner.temp }}/benchmark.md
+        run: |
+          dotnet test tests/DataScope.Api.Tests --no-build -c Release --filter "Category=Benchmark"
+          { echo "## Scale benchmark"; echo; cat "$DATASCOPE_BENCH_OUT"; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Fail if the EF model drifted from the migrations
+        run: |
+          dotnet tool restore
+          dotnet ef migrations has-pending-model-changes -p src/DataScope.Persistence --no-build --configuration Release
+
+  # The Windows jobs bill at twice the Linux rate, so pull requests skip them (D150): they run on main,
+  # whose green build is the only one Update-DataScope.ps1 installs, and when the workflow is started by hand.
+  dotnet-windows:
+    name: .NET on Windows (build, non-database tests)
+    if: github.event_name != 'pull_request'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+      - run: dotnet restore --locked-mode
+      - run: dotnet build --no-restore -c Release
+      # Database and directory tests run in the Linux job against PostgreSQL 16 and a Samba AD DC.
+      # One test project at a time (-m:1): side by side on this runner, the timing tests (regex speed, pausing a reader)
+      # measured each other's load instead of the code, up to 100 times slower than alone.
+      - run: dotnet test --no-build -c Release -m:1 --filter "Category!=Database&Category!=Directory&Category!=Benchmark"
+
+  package:
+    name: Windows install package
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: dotnet restore --locked-mode
+      - name: Test the SBOM generator and the one-file installer writer
+        run: node --test scripts/sbom.test.mjs scripts/make-setup.test.mjs
+      # PostgreSQL and the Visual C++ runtime bundled for DataScope-Setup (D169), downloaded once per pinned version.
+      - uses: actions/cache@v4
+        with:
+          path: artifacts/cache
+          key: windows-dependencies-${{ hashFiles('scripts/windows-dependencies.env') }}
+      - name: Build the package
+        run: scripts/package.sh "0.2.0-lab.${{ github.run_number }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DataScope-windows-package
+          path: |
+            artifacts/DataScope-*.zip
+            artifacts/DataScope-*.zip.sha256
+          if-no-files-found: error
+          retention-days: 30
+      # The one-file installer on its own, so a lab can download just DataScope-Setup-<version>.exe.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DataScope-Setup
+          path: |
+            artifacts/DataScope-Setup-*.exe
+            artifacts/DataScope-Setup-*.exe.sha256
+            artifacts/Prepare-DataScopeDomain.ps1
+            artifacts/Enable-DataScopeAuditing.ps1
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+      - name: Build the detection test pack for a lab
+        run: scripts/package-test-pack.sh "0.2.0-lab.${{ github.run_number }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DataScope-test-pack
+          path: |
+            artifacts/DataScope-Test-Pack-*.zip
+            artifacts/DataScope-Test-Pack-*.zip.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+  install-test:
+    name: Install, scan, upgrade and uninstall on Windows
+    needs: package
+    runs-on: windows-latest
+    env:
+      DS_PORT: "8443"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: DataScope-windows-package
+          path: package
+      - uses: actions/download-artifact@v4
+        with:
+          name: DataScope-test-pack
+          path: test-pack
+      - name: Lint the install scripts
+        shell: pwsh
+        run: |
+          $results = Invoke-ScriptAnalyzer -Path deploy/windows -Recurse -Severity Error, Warning `
+            -ExcludeRule PSAvoidUsingWriteHost, PSUseShouldProcessForStateChangingFunctions, PSAvoidUsingPlainTextForPassword, PSAvoidUsingConvertToSecureStringWithPlainText
+          $results | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
+          if ($results) { throw "$($results.Count) script analyzer finding(s)" }
+      - name: Unzip the package
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem package/DataScope-*.zip | Select-Object -First 1
+          $expected = (Get-Content "$($zip.FullName).sha256").Split(' ')[0]
+          if ((Get-FileHash $zip.FullName -Algorithm SHA256).Hash -ne $expected.ToUpperInvariant()) { throw 'Package checksum mismatch' }
+          Expand-Archive $zip.FullName -DestinationPath C:\ds-package
+          $dir = (Get-ChildItem C:\ds-package -Directory | Select-Object -First 1).FullName
+          "DS_PACKAGE=$dir" >> $env:GITHUB_ENV
+      - name: Sign the package with a throwaway certificate
+        shell: powershell
+        run: |
+          # Stands in for the real code signing certificate: created here, trusted on this runner only, gone with it.
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=Data Scope CI (throwaway)' `
+            -CertStoreLocation Cert:\CurrentUser\My -NotAfter (Get-Date).AddDays(1)
+          $cer = Join-Path $env:RUNNER_TEMP 'ci-signing.cer'
+          Export-Certificate -Cert $cert -FilePath $cer | Out-Null
+          Import-Certificate -FilePath $cer -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
+          Import-Certificate -FilePath $cer -CertStoreLocation Cert:\LocalMachine\TrustedPublisher | Out-Null
+          # Kept unsigned, to play an attacker's replacement below.
+          Copy-Item "$env:DS_PACKAGE\app\api\DataScope.Core.dll" (Join-Path $env:RUNNER_TEMP 'unsigned-core.dll')
+          .\deploy\windows\Sign-DataScopePackage.ps1 -PackagePath $env:DS_PACKAGE -CertificateThumbprint $cert.Thumbprint
+          $sig = Get-AuthenticodeSignature "$env:DS_PACKAGE\app\api\DataScope.Api.exe"
+          if ($sig.Status -ne 'Valid') { throw "DataScope.Api.exe is not validly signed: $($sig.Status)" }
+          $npgsql = Get-AuthenticodeSignature "$env:DS_PACKAGE\app\api\Npgsql.dll"
+          if ($npgsql.SignerCertificate -and $npgsql.SignerCertificate.Thumbprint -eq $cert.Thumbprint) { throw 'A third-party file was re-signed' }
+          if (-not (Test-Path "$env:DS_PACKAGE.zip.sha256")) { throw 'No signed zip was written' }
+      - name: Prepare a throwaway lab (PostgreSQL, local accounts, a share)
+        shell: powershell
+        run: |
+          $bytes = New-Object byte[] 24; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+          $password = 'Ds1!' + [Convert]::ToBase64String($bytes)
+          [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+          $userPassword = 'Us1!' + [Convert]::ToBase64String($bytes)
+          Write-Host "::add-mask::$password"
+          Write-Host "::add-mask::$userPassword"
+          "DS_SCAN_PASSWORD=$password" >> $env:GITHUB_ENV
+          "DS_USER_PASSWORD=$userPassword" >> $env:GITHUB_ENV
+          .\deploy\windows\ci\New-InstallTestLab.ps1 -ScanPassword $password -UserPassword $userPassword
+      - name: Preflight passes, and a package with a swapped program is refused
+        shell: powershell
+        run: |
+          $preflight = & "$env:DS_PACKAGE\Install-DataScope.ps1" -PreflightOnly -RequireSignature -ScanAccount "$env:COMPUTERNAME\dsscan" `
+            -AdminGroup "$env:COMPUTERNAME\DataScopeAdmins" -Port $env:DS_PORT 6>&1 | Out-String
+          Write-Host $preflight
+          if ($preflight -notmatch 'All required checks passed' -or $preflight -notmatch 'signed by Data Scope CI') { throw 'Preflight did not pass on the signed package' }
+          if (Test-Path "$env:ProgramData\DataScope") { throw 'Preflight changed this server' }
+
+          # An attacker who can change files can also fix SHA256SUMS; only the signature tells.
+          $tampered = 'C:\ds-tampered'
+          Copy-Item $env:DS_PACKAGE $tampered -Recurse
+          Copy-Item (Join-Path $env:RUNNER_TEMP 'unsigned-core.dll') "$tampered\app\api\DataScope.Core.dll" -Force
+          $hash = (Get-FileHash "$tampered\app\api\DataScope.Core.dll" -Algorithm SHA256).Hash.ToLowerInvariant()
+          $sums = (Get-Content "$tampered\SHA256SUMS") -replace '^[0-9a-f]{64}(  app/api/DataScope\.Core\.dll)$', "$hash`$1"
+          [IO.File]::WriteAllText("$tampered\SHA256SUMS", (($sums -join "`n") + "`n"))
+          $refused = $false
+          try { & "$tampered\Install-DataScope.ps1" -PreflightOnly -ScanAccount "$env:COMPUTERNAME\dsscan" -AdminGroup "$env:COMPUTERNAME\DataScopeAdmins" -Port $env:DS_PORT }
+          catch { $refused = $true; Write-Host "Refused as expected: $($_.Exception.Message)" }
+          if (-not $refused) { throw 'A package with an unsigned program passed the preflight' }
+          Remove-Item $tampered -Recurse -Force
+      - name: The update script refuses a server without Data Scope
+        shell: powershell
+        run: |
+          $refused = $false
+          try { & "$env:DS_PACKAGE\Update-DataScope.ps1" -Package "$env:DS_PACKAGE.zip" }
+          catch { $refused = $true; Write-Host "Refused as expected: $($_.Exception.Message)" }
+          if (-not $refused) { throw 'Update-DataScope.ps1 ran on a server without Data Scope' }
+          if (Test-Path "$env:ProgramData\DataScope") { throw 'The refused update changed this server' }
+      - name: A first install with no scan account stops when no one can answer, changing nothing
+        shell: powershell
+        run: |
+          # Run as a scheduled task or remote session would: the installer can't ask, so it must say what is missing.
+          $ErrorActionPreference = 'Continue'
+          $out = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$env:DS_PACKAGE\Install-DataScope.ps1" `
+            -AdminGroup "$env:COMPUTERNAME\DataScopeAdmins" -Port $env:DS_PORT 2>&1 | Out-String
+          Write-Host $out
+          if ($LASTEXITCODE -eq 0) { throw 'A first install without -ScanAccount went ahead' }
+          if ($out -notmatch 'needs -ScanAccount') { throw 'The refusal did not say what was missing' }
+          if (Test-Path "$env:ProgramData\DataScope") { throw 'The refused install changed this server' }
+          if (Get-Service DataScopeApi -ErrorAction SilentlyContinue) { throw 'The refused install created a service' }
+          # The refused install's exit code 1 is the expected result here, not the step's.
+          exit 0
+      - name: The domain preparation script stops cleanly outside a domain
+        shell: powershell
+        run: |
+          $refused = $false
+          try { & "$env:DS_PACKAGE\Prepare-DataScopeDomain.ps1" -DataScopeServer $env:COMPUTERNAME -AdminMembers dsadmin -Lab }
+          catch {
+            $refused = $true
+            Write-Host "Refused as expected: $($_.Exception.Message)"
+            if ($_.Exception.Message -notmatch 'domain|Active Directory') { throw }
+          }
+          if (-not $refused) { throw 'Prepare-DataScopeDomain.ps1 ran on a computer outside a domain' }
+      - name: Install (Windows PowerShell 5.1, as customers run it)
+        shell: powershell
+        run: |
+          $scan = New-Object pscredential "$env:COMPUTERNAME\dsscan", (ConvertTo-SecureString $env:DS_SCAN_PASSWORD -AsPlainText -Force)
+          $pg = New-Object pscredential 'postgres', (ConvertTo-SecureString $env:PGPASSWORD -AsPlainText -Force)
+          & "$env:DS_PACKAGE\Install-DataScope.ps1" -ScanAccount "$env:COMPUTERNAME\dsscan" -ScanCredential $scan `
+            -AdminGroup "$env:COMPUTERNAME\DataScopeAdmins" -DatabaseAdminCredential $pg -Port $env:DS_PORT -RequireSignature
+          # The self-signed certificate is saved for browsers to trust: the one in use, and never its key.
+          $cer = New-Object Security.Cryptography.X509Certificates.X509Certificate2 "$env:ProgramData\DataScope\datascope-https.cer"
+          $configured = (Get-Content "$env:ProgramData\DataScope\config\datascope.json" -Raw | ConvertFrom-Json).Https.CertificateThumbprint
+          if ($cer.Thumbprint -ne $configured) { throw "datascope-https.cer is $($cer.Thumbprint), not the HTTPS certificate $configured" }
+          if ($cer.HasPrivateKey) { throw 'datascope-https.cer holds a private key' }
+          # Listed in Settings, Apps, whose Uninstall runs the signed copy of the uninstall script kept with the programs.
+          $apps = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\DataScope'
+          if ($apps.DisplayVersion -ne (Get-Content "$env:DS_PACKAGE\VERSION")) { throw "Settings, Apps lists version $($apps.DisplayVersion)" }
+          if ($apps.UninstallString -notmatch 'Uninstall-DataScope\.ps1" -FromApps$') { throw "Unexpected uninstall command: $($apps.UninstallString)" }
+          if ((Get-AuthenticodeSignature "$env:ProgramFiles\Data Scope\Uninstall-DataScope.ps1").Status -ne 'Valid') { throw 'The kept uninstall script is not signed' }
+      - name: Sign in, scan the lab share and check the results
+        shell: pwsh
+        run: |
+          $secret = ConvertTo-SecureString $env:DS_USER_PASSWORD -AsPlainText -Force
+          ./deploy/windows/ci/Test-LabInstall.ps1 -Port $env:DS_PORT -SharePath C:\DSLab\Finance `
+            -Admin ([pscredential]::new("$env:COMPUTERNAME\dsadmin", $secret)) -NoRole ([pscredential]::new("$env:COMPUTERNAME\dsnobody", $secret))
+      - name: Share the detection test pack from its zip, twice (Windows PowerShell 5.1, as in a lab)
+        shell: powershell
+        run: |
+          $zip = Get-ChildItem test-pack/DataScope-Test-Pack-*.zip | Select-Object -First 1
+          $expected = (Get-Content "$($zip.FullName).sha256").Split(' ')[0]
+          if ((Get-FileHash $zip.FullName -Algorithm SHA256).Hash -ne $expected.ToUpperInvariant()) { throw 'Test pack checksum mismatch' }
+          Expand-Archive $zip.FullName -DestinationPath C:\ds-test-pack
+          $pack = 'C:\ds-test-pack\DataScope-Test-Pack'
+          # A misspelt account is refused before anything is copied.
+          $refused = $false
+          try { & "$pack\Install-DataScopeTestPack.ps1" -ScanAccount 'no-such-scan-account' } catch { $refused = $true; Write-Host "Refused as expected: $($_.Exception.Message)" }
+          if (-not $refused) { throw 'The pack was shared to an account that does not exist' }
+          if (Test-Path C:\Shares\TestPack) { throw 'The refused run copied files' }
+          # The account without its domain is found too.
+          & "$pack\Install-DataScopeTestPack.ps1" -ScanAccount 'dsscan'
+          # A second run replaces the copy, including the denied folder, the junction and the long path.
+          $refused = $false
+          try { & "$pack\Install-DataScopeTestPack.ps1" -ScanAccount "$env:COMPUTERNAME\dsscan" } catch { $refused = $true; Write-Host "Refused as expected: $($_.Exception.Message)" }
+          if (-not $refused) { throw 'The pack was replaced without -Force' }
+          & "$pack\Install-DataScopeTestPack.ps1" -ScanAccount "$env:COMPUTERNAME\dsscan" -Force
+      - name: Scan the test pack and check every file against expected.csv (Windows PowerShell 5.1)
+        shell: powershell
+        run: |
+          $secret = ConvertTo-SecureString $env:DS_USER_PASSWORD -AsPlainText -Force
+          $admin = New-Object pscredential "$env:COMPUTERNAME\dsadmin", $secret
+          & C:\ds-test-pack\DataScope-Test-Pack\Test-DataScopeTestPack.ps1 -Url "https://localhost:$env:DS_PORT" -Server $env:COMPUTERNAME `
+            -Credential $admin -SkipCertificateCheck -StartScan -ScanTimeoutMinutes 15
+          if ($LASTEXITCODE -ne 0) { throw 'The test pack check failed' }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-pack-results-windows
+          path: C:\ds-test-pack\DataScope-Test-Pack\test-pack-results.csv
+          if-no-files-found: ignore
+      - name: Turn on auditing with the packaged script (as an administrator would)
+        shell: powershell
+        run: |
+          $script = "$env:DS_PACKAGE\Enable-DataScopeAuditing.ps1"
+          $sig = Get-AuthenticodeSignature $script
+          if ($sig.Status -ne 'Valid') { throw "Enable-DataScopeAuditing.ps1 is not validly signed: $($sig.Status)" }
+          & $script -Path C:\DSLab\Finance -ReaderAccount "$env:COMPUTERNAME\dsscan" -SecurityLogSizeMB 256 -WhatIf
+          & $script -Path C:\DSLab\Finance -ReaderAccount "$env:COMPUTERNAME\dsscan" -SecurityLogSizeMB 256
+          & $script -Check -Path C:\DSLab\Finance -ReaderAccount "$env:COMPUTERNAME\dsscan"
+          if ($LASTEXITCODE -ne 0) { throw 'The auditing check failed after turning auditing on' }
+          # The scanner reads this server's own log with its service token, which predates the group change; a remote
+          # file server builds a fresh token for each connection instead.
+          Restart-Service DataScopeScanner
+          Grant-SmbShareAccess -Name DSLabFinance -AccountName "$env:COMPUTERNAME\$env:USERNAME" -AccessRight Full -Force | Out-Null
+      - name: File activity is read from the Security log as the non-admin scan account
+        shell: pwsh
+        run: |
+          $secret = ConvertTo-SecureString $env:DS_USER_PASSWORD -AsPlainText -Force
+          ./deploy/windows/ci/Test-FileActivity.ps1 -Port $env:DS_PORT -SharePath C:\DSLab\Finance -Admin ([pscredential]::new("$env:COMPUTERNAME\dsadmin", $secret))
+      - name: The auditing script removes what it added, and its check says so
+        shell: powershell
+        run: |
+          $script = "$env:DS_PACKAGE\Enable-DataScopeAuditing.ps1"
+          & $script -Remove -Path C:\DSLab\Finance -ReaderAccount "$env:COMPUTERNAME\dsscan"
+          & $script -Check -Path C:\DSLab\Finance -ReaderAccount "$env:COMPUTERNAME\dsscan"
+          if ($LASTEXITCODE -ne 1) { throw "The check should report the removed audit entries and membership (exit $LASTEXITCODE)" }
+          # The check's exit code 1 is the expected result here, not the step's.
+          exit 0
+      - name: Upgrade in place (run the installer again)
+        shell: powershell
+        run: |
+          & "$env:DS_PACKAGE\Install-DataScope.ps1"
+      - name: Results survive the upgrade
+        shell: pwsh
+        run: |
+          $secret = ConvertTo-SecureString $env:DS_USER_PASSWORD -AsPlainText -Force
+          ./deploy/windows/ci/Test-LabInstall.ps1 -Port $env:DS_PORT -AfterUpgrade -Admin ([pscredential]::new("$env:COMPUTERNAME\dsadmin", $secret))
+      - name: Update in place with Update-DataScope.ps1 from the signed zip
+        shell: powershell
+        run: |
+          $script = "$env:DS_PACKAGE\Update-DataScope.ps1"
+          if ((Get-AuthenticodeSignature $script).Status -ne 'Valid') { throw 'Update-DataScope.ps1 is not validly signed' }
+          # The same version is already installed: nothing to do without -Force.
+          $same = & $script -Package "$env:DS_PACKAGE.zip" 6>&1 | Out-String
+          Write-Host $same
+          if ($same -notmatch 'is already installed') { throw 'The update did not notice the version was already installed' }
+          # A damaged download is refused before anything changes.
+          $bad = Join-Path $env:RUNNER_TEMP (Split-Path "$env:DS_PACKAGE.zip" -Leaf)
+          Copy-Item "$env:DS_PACKAGE.zip" $bad
+          Set-Content "$bad.sha256" ('0' * 64)
+          $refused = $false
+          try { & $script -Package $bad -Force } catch { $refused = $true; Write-Host "Refused as expected: $($_.Exception.Message)" }
+          if (-not $refused) { throw 'A zip that does not match its checksum was installed' }
+          & $script -Package "$env:DS_PACKAGE.zip" -Force -RequireSignature
+          # Run again from inside the folder it just unzipped to, as an admin does next time: it must replace that folder.
+          $name = Split-Path $env:DS_PACKAGE -Leaf
+          $unzipped = Join-Path $env:ProgramData "DataScope\updates\$name\$name"
+          Push-Location $unzipped
+          try { & .\Update-DataScope.ps1 -Package "$env:DS_PACKAGE.zip" -Force -CheckOnly } finally { Pop-Location }
+      - name: Results survive the update
+        shell: pwsh
+        run: |
+          $secret = ConvertTo-SecureString $env:DS_USER_PASSWORD -AsPlainText -Force
+          ./deploy/windows/ci/Test-LabInstall.ps1 -Port $env:DS_PORT -AfterUpgrade -Admin ([pscredential]::new("$env:COMPUTERNAME\dsadmin", $secret))
+      - name: Saved passwords are encrypted and the owner login is admin-only
+        shell: powershell
+        run: |
+          $config = "$env:ProgramData\DataScope\config"
+          $json = Get-Content "$config\datascope.json" -Raw
+          if ($json -match 'Password=') { throw 'datascope.json holds a plain-text password' }
+          if ($json -notmatch '"dpapi:') { throw 'datascope.json has no DPAPI-encrypted value' }
+          $owner = Get-Content "$config\setup-only\database-owner.json" -Raw
+          if ($owner -match 'Password=' -or $owner -notmatch '"dpapi:') { throw 'The owner settings are not encrypted' }
+          $acl = Get-Acl "$config\setup-only"
+          if (-not $acl.AreAccessRulesProtected) { throw 'setup-only inherits permissions' }
+          $sids = @($acl.Access | ForEach-Object { $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value } | Sort-Object -Unique)
+          if (($sids -join ',') -ne 'S-1-5-18,S-1-5-32-544') { throw "setup-only is open to: $($sids -join ', ')" }
+          $check = & "$env:ProgramFiles\Data Scope\setup\DataScope.Setup.exe" check --config "$config\datascope.json" | Out-String
+          Write-Host $check
+          foreach ($line in '[ OK ] Database logins', '[ OK ] Passwords', '[ OK ] Backups') {
+            if (-not $check.Contains($line)) { throw "check did not report: $line" }
+          }
+      - name: Nightly backup runs as SYSTEM, and a restore brings the data back
+        shell: pwsh
+        run: |
+          $setup = "$env:ProgramFiles\Data Scope\setup\DataScope.Setup.exe"
+          $config = "$env:ProgramData\DataScope\config\datascope.json"
+          $backups = "$env:ProgramData\DataScope\backups"
+          $task = Get-ScheduledTask -TaskPath '\Data Scope\' -TaskName 'Data Scope backup'
+          if ($task.Principal.UserId -notmatch 'SYSTEM') { throw "The backup task runs as $($task.Principal.UserId)" }
+          $upgradeCopy = Get-ChildItem $backups -Filter 'datascope-before-upgrade-*.dsbackup' | Select-Object -First 1
+          if (-not $upgradeCopy) { throw 'The upgrade took no backup first' }
+          $before = @(Get-ChildItem $backups -Filter 'datascope-2*.dsbackup').Count
+          Start-ScheduledTask -TaskPath '\Data Scope\' -TaskName 'Data Scope backup'
+          $deadline = (Get-Date).AddMinutes(5)
+          do { Start-Sleep -Seconds 3; $task = Get-ScheduledTask -TaskPath '\Data Scope\' -TaskName 'Data Scope backup' } while ($task.State -eq 'Running' -and (Get-Date) -lt $deadline)
+          $info = Get-ScheduledTaskInfo -TaskPath '\Data Scope\' -TaskName 'Data Scope backup'
+          if ($info.LastTaskResult -ne 0) { throw "The backup task failed with result $($info.LastTaskResult)" }
+          if (@(Get-ChildItem $backups -Filter 'datascope-2*.dsbackup').Count -le $before) { throw 'The backup task wrote no file' }
+          $users = (Get-Acl $backups).Access | ForEach-Object { $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value } | Sort-Object -Unique
+          if (($users -join ',') -ne 'S-1-5-18,S-1-5-32-544') { throw "The backup folder is open to: $($users -join ', ')" }
+
+          & $setup verify-backup --from $upgradeCopy.FullName --config $config
+          if ($LASTEXITCODE -ne 0) { throw 'verify-backup failed' }
+          Stop-Service DataScopeScanner, DataScopeApi
+          & $setup restore --from $upgradeCopy.FullName --confirm --config $config
+          if ($LASTEXITCODE -ne 0) { throw 'restore failed' }
+          Start-Service DataScopeApi
+          $deadline = (Get-Date).AddMinutes(2)
+          do { Start-Sleep -Seconds 2; $ok = (Invoke-WebRequest "https://localhost:$env:DS_PORT/health" -SkipCertificateCheck -SkipHttpErrorCheck).StatusCode -eq 200 } while (-not $ok -and (Get-Date) -lt $deadline)
+          if (-not $ok) { throw 'The API did not come back after the restore' }
+          Start-Service DataScopeScanner
+          $secret = ConvertTo-SecureString $env:DS_USER_PASSWORD -AsPlainText -Force
+          ./deploy/windows/ci/Test-LabInstall.ps1 -Port $env:DS_PORT -AfterUpgrade -Admin ([pscredential]::new("$env:COMPUTERNAME\dsadmin", $secret))
+      - name: Uninstall keeps settings, backups and data
+        shell: powershell
+        run: |
+          & "$env:DS_PACKAGE\Uninstall-DataScope.ps1"
+          if (Get-Service DataScopeApi, DataScopeScanner -ErrorAction SilentlyContinue) { throw 'Services still exist' }
+          if (Test-Path "$env:ProgramFiles\Data Scope") { throw 'Program folder still exists' }
+          if (-not (Test-Path "$env:ProgramData\DataScope\config\datascope.json")) { throw 'Settings were removed' }
+          if (Get-ScheduledTask -TaskPath '\Data Scope\' -TaskName 'Data Scope backup' -ErrorAction SilentlyContinue) { throw 'The backup task is still scheduled' }
+          if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\DataScope') { throw 'Still listed in Settings, Apps' }
+          if (-not (Get-ChildItem "$env:ProgramData\DataScope\backups" -Filter '*.dsbackup')) { throw 'Backups were removed' }
+          $count = & "$env:PGBIN\psql.exe" -U postgres -d datascope -tAc 'SELECT count(*) FROM shares'
+          if ([int]$count -lt 1) { throw 'Database lost its data' }
+          Write-Host "Uninstalled; settings and $count share rows kept."
+      - name: Diagnostics
+        if: failure()
+        shell: powershell
+        run: |
+          Get-Service DataScope* -ErrorAction SilentlyContinue | Format-Table Name, Status, StartType -AutoSize
+          Get-CimInstance Win32_Service -Filter "Name LIKE 'DataScope%'" | Format-Table Name, StartName, State -AutoSize
+          Get-EventLog -LogName Application -Source 'Data Scope*' -Newest 60 -ErrorAction SilentlyContinue | Format-List TimeGenerated, Source, EntryType, Message
+          Get-EventLog -LogName Application -Source '.NET Runtime', 'Application Error' -Newest 10 -ErrorAction SilentlyContinue | Format-List TimeGenerated, Source, Message
+          Get-ChildItem "$env:ProgramData\DataScope\logs" -ErrorAction SilentlyContinue | ForEach-Object { Get-Content $_.FullName }
+
+  setup-test:
+    name: One-file installer on Windows (bundled database, upgrade, reinstall, uninstall)
+    needs: package
+    runs-on: windows-latest
+    env:
+      DS_PORT: "8443"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: DataScope-windows-package
+          path: package
+      - uses: actions/download-artifact@v4
+        with:
+          name: DataScope-Setup
+          path: setup
+      - name: Sign the package and write the signed one-file installer, with a throwaway certificate
+        shell: powershell
+        run: |
+          $zip = Get-ChildItem package/DataScope-*.zip | Select-Object -First 1
+          Expand-Archive $zip.FullName -DestinationPath C:\ds-package
+          $dir = (Get-ChildItem C:\ds-package -Directory | Select-Object -First 1).FullName
+          "DS_PACKAGE=$dir" >> $env:GITHUB_ENV
+          if (-not (Test-Path "$dir\app\postgresql\bin\postgres.exe")) { throw 'The package has no bundled PostgreSQL' }
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=Data Scope CI (throwaway)' `
+            -CertStoreLocation Cert:\CurrentUser\My -NotAfter (Get-Date).AddDays(1)
+          $cer = Join-Path $env:RUNNER_TEMP 'ci-signing.cer'
+          Export-Certificate -Cert $cert -FilePath $cer | Out-Null
+          Import-Certificate -FilePath $cer -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
+          Import-Certificate -FilePath $cer -CertStoreLocation Cert:\LocalMachine\TrustedPublisher | Out-Null
+          .\deploy\windows\Sign-DataScopePackage.ps1 -PackagePath $dir -CertificateThumbprint $cert.Thumbprint
+          $setup = Get-ChildItem C:\ds-package -Filter 'DataScope-Setup-*.exe' | Select-Object -First 1
+          if (-not $setup) { throw 'No signed one-file installer was written' }
+          $sig = Get-AuthenticodeSignature $setup.FullName
+          if ($sig.Status -ne 'Valid') { throw "The one-file installer is not validly signed: $($sig.Status)" }
+          foreach ($name in 'Prepare-DataScopeDomain.ps1', 'Enable-DataScopeAuditing.ps1') {
+            $copy = Join-Path C:\ds-package $name
+            if (-not (Test-Path $copy)) { throw "$name was not written next to the installer" }
+            if ((Get-AuthenticodeSignature $copy).Status -ne 'Valid') { throw "$name next to the installer is not signed" }
+            if (-not (Test-Path "setup/$name")) { throw "The DataScope-Setup download has no $name" }
+          }
+          "DS_SETUP=$($setup.FullName)" >> $env:GITHUB_ENV
+          Write-Host "$($setup.Name): $([math]::Round($setup.Length / 1MB)) MB, signed"
+      - name: The signed installer finds and unpacks the package inside it
+        shell: powershell
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP 'extracted'
+          $p = Start-Process $env:DS_SETUP -ArgumentList '/extract', $out -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "/extract ended with exit code $($p.ExitCode)" }
+          $script = Get-ChildItem $out -Recurse -Filter 'Install-DataScope.ps1' | Select-Object -First 1
+          if (-not $script) { throw 'Nothing was unpacked' }
+          if ((Get-AuthenticodeSignature $script.FullName).Status -ne 'Valid') { throw 'The unpacked installer is not signed' }
+      - name: Prepare a throwaway lab (local accounts, a share; the runner's PostgreSQL holds port 5432)
+        shell: powershell
+        run: |
+          $bytes = New-Object byte[] 24; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+          $password = 'Ds1!' + [Convert]::ToBase64String($bytes)
+          [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+          $userPassword = 'Us1!' + [Convert]::ToBase64String($bytes)
+          Write-Host "::add-mask::$password"
+          Write-Host "::add-mask::$userPassword"
+          "DS_SCAN_PASSWORD=$password" >> $env:GITHUB_ENV
+          "DS_USER_PASSWORD=$userPassword" >> $env:GITHUB_ENV
+          .\deploy\windows\ci\New-InstallTestLab.ps1 -ScanPassword $password -UserPassword $userPassword
+      - name: A quiet first install with no scan account stops, changing nothing
+        shell: powershell
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP 'setup-refused.log'
+          $p = Start-Process $env:DS_SETUP -ArgumentList '/quiet', '--admin-group', "$env:COMPUTERNAME\DataScopeAdmins", '--log', $log -Wait -PassThru
+          Get-Content $log
+          if ($p.ExitCode -eq 0) { throw 'A first install without a scan account went ahead' }
+          if (Get-Service DataScopeApi, DataScopeDatabase -ErrorAction SilentlyContinue) { throw 'The refused install changed this server' }
+      - name: Install quietly with the bundled database (as an IT provider would)
+        shell: powershell
+        env:
+          DATASCOPE_INSTALL_SCAN_PASSWORD: ${{ env.DS_SCAN_PASSWORD }}
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP 'setup-install.log'
+          $p = Start-Process $env:DS_SETUP -ArgumentList '/quiet', '--scan-account', "$env:COMPUTERNAME\dsscan", '--admin-group',
+            "$env:COMPUTERNAME\DataScopeAdmins", '--port', $env:DS_PORT, '--log', $log -Wait -PassThru
+          Get-Content $log
+          if ($p.ExitCode -ne 0) { throw "Setup ended with exit code $($p.ExitCode)" }
+          if ((Get-Content $log -Raw) -match [regex]::Escape($env:DS_SCAN_PASSWORD)) { throw 'The scan password is in the setup log' }
+
+          $db = Get-CimInstance Win32_Service -Filter "Name='DataScopeDatabase'"
+          if (-not $db -or $db.State -ne 'Running') { throw 'The Data Scope Database service is not running' }
+          if ($db.StartName -ne 'NT AUTHORITY\NetworkService') { throw "The database runs as $($db.StartName)" }
+          $conf = Get-Content "$env:ProgramData\DataScope\database\postgresql.conf" -Raw
+          if ($conf -notmatch "listen_addresses = 'localhost'") { throw 'The database listens beyond this server' }
+          # The runner's own PostgreSQL holds 5432, so the bundled one took the next free port.
+          if ($conf -notmatch 'port = 5433') { throw 'The database did not move to the next free port' }
+          $sids = @((Get-Acl "$env:ProgramData\DataScope\database").Access | ForEach-Object { $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value } | Sort-Object -Unique)
+          if (($sids -join ',') -ne 'S-1-5-18,S-1-5-20,S-1-5-32-544') { throw "The database folder is open to: $($sids -join ', ')" }
+          $admin = "$env:ProgramData\DataScope\config\setup-only\database-admin.dat"
+          if (-not (Test-Path $admin)) { throw 'The database admin password was not kept' }
+          if ((Get-Content $admin -Raw) -match '^[A-Za-z0-9x]{32}$') { throw 'The database admin password is not encrypted' }
+          $json = Get-Content "$env:ProgramData\DataScope\config\datascope.json" -Raw | ConvertFrom-Json
+          if ($json.Backup.PgBinPath -notlike '*Data Scope Database\bin') { throw "Backups use pg_dump from $($json.Backup.PgBinPath)" }
+          $apps = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\DataScope'
+          if ($apps.DisplayName -ne 'Data Scope') { throw 'Not listed in Settings, Apps' }
+      - name: Sign in, scan the lab share and check the results
+        shell: pwsh
+        run: |
+          $secret = ConvertTo-SecureString $env:DS_USER_PASSWORD -AsPlainText -Force
+          ./deploy/windows/ci/Test-LabInstall.ps1 -Port $env:DS_PORT -Admin ([pscredential]::new("$env:COMPUTERNAME\dsadmin", $secret))
+      - name: Upgrade quietly; an older bundled PostgreSQL of the same major version is updated
+        shell: powershell
+        run: |
+          # Stands in for a server installed from an earlier package with an older PostgreSQL minor version.
+          $version = Get-Content "$env:DS_PACKAGE\app\postgresql\VERSION"
+          $major = ($version -split '\.')[0]
+          Set-Content "$env:ProgramFiles\Data Scope Database\VERSION" "$major.0"
+          $log = Join-Path $env:RUNNER_TEMP 'setup-upgrade.log'
+          $p = Start-Process $env:DS_SETUP -ArgumentList '/quiet', '--log', $log -Wait -PassThru
+          Get-Content $log
+          if ($p.ExitCode -ne 0) { throw "The upgrade ended with exit code $($p.ExitCode)" }
+          if ((Get-Content $log -Raw) -notmatch 'Updating the Data Scope database') { throw 'The bundled PostgreSQL was not updated' }
+          if ((Get-Content "$env:ProgramFiles\Data Scope Database\VERSION") -ne $version) { throw 'The database programs are not the package version' }
+          if ((Get-Service DataScopeDatabase).Status -ne 'Running') { throw 'The database is not running after the upgrade' }
+      - name: Results survive the upgrade
+        shell: pwsh
+        run: |
+          $secret = ConvertTo-SecureString $env:DS_USER_PASSWORD -AsPlainText -Force
+          ./deploy/windows/ci/Test-LabInstall.ps1 -Port $env:DS_PORT -AfterUpgrade -Admin ([pscredential]::new("$env:COMPUTERNAME\dsadmin", $secret))
+      - name: Uninstall keeps the database; installing again uses it, with the results
+        shell: powershell
+        env:
+          DATASCOPE_INSTALL_SCAN_PASSWORD: ${{ env.DS_SCAN_PASSWORD }}
+        run: |
+          & "$env:ProgramFiles\Data Scope\Uninstall-DataScope.ps1"
+          if (Get-Service DataScopeApi, DataScopeScanner -ErrorAction SilentlyContinue) { throw 'Services still exist' }
+          if ((Get-Service DataScopeDatabase).Status -ne 'Running') { throw 'The database was not kept running' }
+          if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\DataScope') { throw 'Still listed in Settings, Apps' }
+          if (Test-Path "$env:ProgramFiles\Data Scope") { throw 'Program folder still exists' }
+
+          $log = Join-Path $env:RUNNER_TEMP 'setup-reinstall.log'
+          $p = Start-Process $env:DS_SETUP -ArgumentList '/quiet', '--scan-account', "$env:COMPUTERNAME\dsscan", '--admin-group',
+            "$env:COMPUTERNAME\DataScopeAdmins", '--port', $env:DS_PORT, '--log', $log -Wait -PassThru
+          Get-Content $log
+          if ($p.ExitCode -ne 0) { throw "The reinstall ended with exit code $($p.ExitCode)" }
+          if ((Get-Content $log -Raw) -notmatch 'Using the Data Scope database already on this server') { throw 'The kept database was not used' }
+      - name: Results survive the reinstall
+        shell: pwsh
+        run: |
+          $secret = ConvertTo-SecureString $env:DS_USER_PASSWORD -AsPlainText -Force
+          ./deploy/windows/ci/Test-LabInstall.ps1 -Port $env:DS_PORT -AfterUpgrade -Admin ([pscredential]::new("$env:COMPUTERNAME\dsadmin", $secret))
+      - name: Uninstall with -RemoveDatabase -RemoveSettings removes everything but the backups
+        shell: powershell
+        run: |
+          & "$env:ProgramFiles\Data Scope\Uninstall-DataScope.ps1" -RemoveDatabase -RemoveSettings
+          if (Get-Service DataScopeApi, DataScopeScanner, DataScopeDatabase -ErrorAction SilentlyContinue) { throw 'Services still exist' }
+          foreach ($path in "$env:ProgramFiles\Data Scope", "$env:ProgramFiles\Data Scope Database", "$env:ProgramData\DataScope\database", "$env:ProgramData\DataScope\config") {
+            if (Test-Path $path) { throw "$path still exists" }
+          }
+          if (-not (Get-ChildItem "$env:ProgramData\DataScope\backups" -Filter '*.dsbackup')) { throw 'Backups were removed' }
+      - name: Diagnostics
+        if: failure()
+        shell: powershell
+        run: |
+          Get-Service DataScope* -ErrorAction SilentlyContinue | Format-Table Name, Status, StartType -AutoSize
+          Get-CimInstance Win32_Service -Filter "Name LIKE 'DataScope%'" | Format-Table Name, StartName, State -AutoSize
+          Get-ChildItem $env:RUNNER_TEMP -Filter 'setup-*.log' -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "--- $($_.Name)"; Get-Content $_.FullName }
+          Get-ChildItem "$env:ProgramData\DataScope\database\log" -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "--- $($_.Name)"; Get-Content $_.FullName -Tail 80 }
+          Get-EventLog -LogName Application -Source 'Data Scope*', 'PostgreSQL' -Newest 60 -ErrorAction SilentlyContinue | Format-List TimeGenerated, Source, EntryType, Message
+          Get-ChildItem "$env:ProgramData\DataScope\logs" -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "--- $($_.Name)"; Get-Content $_.FullName }

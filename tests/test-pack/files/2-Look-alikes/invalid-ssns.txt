@@ -1,0 +1,2 @@
+These are not valid SSNs: 000-12-3456, 666-12-3456, 512-00-3456, 512-48-0000.
+SSN field left blank on purpose.

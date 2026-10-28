@@ -1,0 +1,8 @@
+Data Scope
+Copyright 2026 OpenSourceCybersecurity and Data Scope contributors
+https://opensourcecybersecurity.com
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+It includes third-party software under their own licences, listed in
+THIRD-PARTY-NOTICES.md and, for each install package, in sbom.cdx.json.

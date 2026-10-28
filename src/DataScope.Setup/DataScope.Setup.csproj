@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\DataScope.Core\DataScope.Core.csproj" />
+    <ProjectReference Include="..\DataScope.Persistence\DataScope.Persistence.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="System.Diagnostics.EventLog" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="DataScope.Setup.Tests" />
+  </ItemGroup>
+</Project>

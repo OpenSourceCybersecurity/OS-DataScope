@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- DataScope-Setup.exe, the setup wizard. It targets .NET Framework 4.7.2, which every supported Windows Server
+       (2019 and later) already has, so it starts before anything is installed and stays one small file. Its logic
+       is in DataScope.Installer.Core, compiled in here and tested there. -->
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <OutputType>WinExe</OutputType>
+    <AssemblyName>DataScope-Setup</AssemblyName>
+    <RootNamespace>DataScope.Installer</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <!-- 64-bit: a 32-bit process would start the 32-bit PowerShell and see redirected Program Files and registry. -->
+    <PlatformTarget>x64</PlatformTarget>
+    <!-- Stated rather than left to the SDK, which picks these only when building on Windows: the locked restore
+         must match on the Linux and Windows builds. -->
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <AutoGenerateBindingRedirects>false</AutoGenerateBindingRedirects>
+    <GenerateSupportedRuntime>false</GenerateSupportedRuntime>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\DataScope.Installer.Core\*.cs" Link="Core\%(Filename)%(Extension)" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" PrivateAssets="all" />
+  </ItemGroup>
+  <ItemGroup>
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.ServiceProcess" />
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Drawing" />
+  </ItemGroup>
+</Project>

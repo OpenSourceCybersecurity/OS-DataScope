@@ -1,0 +1,21 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+indent_style = space
+indent_size = 2
+
+[*.cs]
+indent_size = 4
+# LoggerMessage source generators are worth it on hot paths, not for one-off startup warnings.
+dotnet_diagnostic.CA1848.severity = suggestion
+
+[**/Migrations/*.cs]
+generated_code = true
+
+[tests/**.cs]
+# Test names read as sentences.
+dotnet_diagnostic.CA1707.severity = none
+dotnet_diagnostic.CA2007.severity = none

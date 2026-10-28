@@ -1,0 +1,2 @@
+# The detection test pack is byte for byte what a lab scans: never convert its line endings.
+tests/test-pack/** -text

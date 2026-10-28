@@ -1,0 +1,101 @@
+File,Label,Read,MustFind,MustNotFind,Tests
+1-Each-kind-of-data/ssn-with-label.txt,Restricted,Scanned,US SSN@High,,A US Social Security number next to its label
+1-Each-kind-of-data/ssn-column.csv,Restricted,Scanned,US SSN@High,,"SSNs under an SSN column header, with and without dashes"
+1-Each-kind-of-data/itin.txt,Restricted,Scanned,US ITIN@High,US SSN,"A US taxpayer ID (ITIN), reported as an ITIN and not as an SSN"
+1-Each-kind-of-data/card-numbers.txt,Restricted,Scanned,Payment card@High,,"Payment card numbers from four issuers, spaced, dashed and run together"
+1-Each-kind-of-data/bank-routing-and-account.txt,Restricted,Scanned,Bank account@High,,A US bank routing number with an account number next to it
+1-Each-kind-of-data/iban.txt,Restricted,Scanned,Bank account@High,,An international bank account number (IBAN) next to a bank word: High
+1-Each-kind-of-data/iban-on-its-own.txt,Confidential,Scanned,Bank account,,An IBAN with no bank word near it: Medium
+1-Each-kind-of-data/private-key.pem,Restricted,Scanned,Credentials@High,,"A private key block (made up, not a working key)"
+1-Each-kind-of-data/app-settings.config,Restricted,Scanned,Credentials,,A password in a database connection string
+1-Each-kind-of-data/deploy-notes.txt,Restricted,Scanned,Credentials@High,,A password and a cloud access key written in notes
+1-Each-kind-of-data/health-record.txt,Restricted,Scanned,Health information,,"Health information (diagnosis code, condition, medication) about a named patient"
+1-Each-kind-of-data/date-of-birth.txt,Confidential,Scanned,Date of birth,,A date of birth next to its label
+1-Each-kind-of-data/drivers-licence.txt,Confidential,Scanned,Driver's licence,,A driver's licence number next to its label
+1-Each-kind-of-data/drivers-licence-column.csv,Restricted,Scanned,Driver's licence@High,,Driver's licence numbers in a licence column
+1-Each-kind-of-data/passport.txt,Confidential,Scanned,Passport,,A passport number next to its label
+1-Each-kind-of-data/passport-column.csv,Restricted,Scanned,Passport@High,,Passport numbers in a passport column
+1-Each-kind-of-data/mailing-labels.txt,Confidential,Scanned,Personal details,,People's names above their home addresses
+1-Each-kind-of-data/customer-list.csv,Confidential,Scanned,Personal details@High,,"A table of six people with home addresses and dates of birth (High, but names and addresses alone are never Restricted)"
+1-Each-kind-of-data/patient-intake.txt,Restricted,Scanned,US SSN@High;Date of birth;Payment card@High,,"Several kinds in one file: each is reported. Known gap: health information in plain words (hypertension, code I10 without a decimal, a medicine name) is not recognised; see DETECTION-LIMITATIONS.md"
+1-Each-kind-of-data/ssn-sixty-rows.csv,Restricted,Scanned,US SSN@High,,Sixty SSNs in one file: every one is counted
+2-Look-alikes/invalid-ssns.txt,Internal,Scanned,,any,Numbers shaped like SSNs that the SSA never issues
+2-Look-alikes/bad-card-checksums.txt,Internal,Scanned,,any,16-digit numbers that fail the card checksum
+2-Look-alikes/phone-numbers.txt,Internal,Scanned,,any,Phone and fax numbers
+2-Look-alikes/dates-without-birth.txt,Internal,Scanned,,any,Dates with no birth label
+2-Look-alikes/iban-bad-checksum.txt,Internal,Scanned,,Bank account,An IBAN-shaped value with wrong check digits
+2-Look-alikes/password-placeholders.config,Internal,Scanned,,Credentials,"Password settings with placeholders, not real values"
+2-Look-alikes/wellness-newsletter.txt,Internal,Scanned,,Health information,Health words with no patient
+2-Look-alikes/business-addresses.txt,Internal,Scanned,,Personal details,Business names above their addresses
+2-Look-alikes/passport-reminder.txt,Internal,Scanned,,Passport,The word passport with no passport number
+2-Look-alikes/order-numbers.csv,Internal,Scanned,,any,Nine-digit order numbers with no SSN header
+2-Look-alikes/routing-number-only.txt,Internal,Scanned,,Bank account,A bank routing number with no account number (a possible match at Low only)
+2-Look-alikes/part-numbers.txt,Confidential,Scanned,US SSN,,Known false positive: a part number formatted exactly like an SSN is reported at Medium (see DETECTION-LIMITATIONS.md)
+3-File-formats/plain.txt,Restricted,Scanned,US SSN@High,,Plain text
+3-File-formats/unicode-utf16.txt,Restricted,Scanned,US SSN@High,,"Text saved as UTF-16 (Notepad ""Unicode"")"
+3-File-formats/utf8-bom.txt,Restricted,Scanned,US SSN@High,,UTF-8 text with a byte order mark and accents
+3-File-formats/latin1.txt,Restricted,Scanned,US SSN@High,,Western European (Latin-1) text
+3-File-formats/table.csv,Restricted,Scanned,US SSN@High,,CSV
+3-File-formats/table.tsv,Restricted,Scanned,US SSN@High,,Tab-separated
+3-File-formats/export.json,Restricted,Scanned,US SSN@High,,JSON
+3-File-formats/export.xml,Restricted,Scanned,US SSN@High,,XML
+3-File-formats/export.yaml,Restricted,Scanned,US SSN@High,,YAML
+3-File-formats/page.html,Restricted,Scanned,US SSN@High,,Web page (HTML)
+3-File-formats/notes.md,Restricted,Scanned,US SSN@High,,Markdown
+3-File-formats/server.log,Restricted,Scanned,US SSN@High,,Log file
+3-File-formats/query.sql,Restricted,Scanned,US SSN@High,,"SQL script (read as text, never run)"
+3-File-formats/cleanup.ps1,Restricted,Scanned,US SSN@High,,"PowerShell script (read as text, never run)"
+3-File-formats/letter.rtf,Restricted,Scanned,US SSN@High,,Rich text (RTF)
+3-File-formats/email.eml,Restricted,Scanned,US SSN@High;Payment card@High,,Email (.eml): the body and an attachment
+3-File-formats/word.docx,Restricted,Scanned,US SSN@High,,Word (.docx) saved by an office suite
+3-File-formats/word-97-2003.doc,Restricted,Scanned,US SSN@High,,Word 97-2003 (.doc)
+3-File-formats/opendocument.odt,Restricted,Scanned,US SSN@High,,"OpenDocument text (.odt), read by its contents"
+3-File-formats/word-saved-as.rtf,Restricted,Scanned,US SSN@High,,Rich text saved by an office suite
+3-File-formats/document.pdf,Restricted,Scanned,US SSN@High,,PDF with a text layer
+3-File-formats/spreadsheet.xlsx,Restricted,Scanned,US SSN@High;Payment card@High,,Excel (.xlsx)
+3-File-formats/spreadsheet-97-2003.xls,Restricted,Scanned,US SSN@High,,Excel 97-2003 (.xls)
+3-File-formats/opendocument.ods,Restricted,Scanned,US SSN@High,,"OpenDocument spreadsheet (.ods), read by its contents"
+3-File-formats/slides.pptx,Restricted,Scanned,US SSN@High;Payment card@High,,PowerPoint (.pptx): a slide and the speaker notes
+3-File-formats/slides-97-2003.ppt,Restricted,Scanned,US SSN@High,,PowerPoint 97-2003 (.ppt)
+3-File-formats/archive.zip,Restricted,Scanned,US SSN@High,,Zip archive
+3-File-formats/zip-inside-zip.zip,Restricted,Scanned,US SSN@High,,A zip inside a zip
+3-File-formats/office-files-in.zip,Restricted,Scanned,US SSN@High,,Office documents inside a zip
+3-File-formats/archive.7z,Restricted,Scanned,US SSN@High,,7-Zip archive
+3-File-formats/archive.rar,Restricted,Partial,US SSN@High,,"RAR archive; the program inside is not opened, so it is Partial"
+3-File-formats/message.msg,Restricted,Scanned,US SSN@High;Payment card@High,,Outlook message (.msg) with an attached file
+3-File-formats/mailbox.pst,Restricted,Scanned,US SSN@High;Payment card@High,,"Outlook data file (.pst): messages, an attachment and an attached message"
+3-File-formats/offline-mailbox.ost,Restricted,Scanned,US SSN@High;Payment card@High,,"Outlook offline mailbox (.ost, compressed as Outlook 2013 and later save it)"
+4-Scans-and-pictures/scanned-form.png,Restricted,Scanned,US SSN@High,,A scanned form (PNG)
+4-Scans-and-pictures/scanned-form.jpg,Restricted,Scanned,US SSN@High,,A scanned form (JPEG)
+4-Scans-and-pictures/scanned-sideways.png,Restricted,Scanned,US SSN@High,,A form scanned sideways
+4-Scans-and-pictures/scanned-upside-down.png,Restricted,Scanned,US SSN@High,,A form scanned upside down
+4-Scans-and-pictures/photo-of-form-tilted.jpg,Restricted,Scanned,US SSN@High,,"A photo of a form, tilted"
+4-Scans-and-pictures/screenshot.png,Restricted,Scanned,US SSN@High,,A screenshot with small text
+4-Scans-and-pictures/fax-two-pages.tif,Restricted,Scanned,US SSN@High,,A two-page fax (TIFF); the SSN is on page 2
+4-Scans-and-pictures/badge.gif,Restricted,Scanned,US SSN@High,,A GIF picture
+4-Scans-and-pictures/scanned-no-text-layer.pdf,Restricted,Scanned,US SSN@High,,A scanned PDF with no text layer
+4-Scans-and-pictures/faxed-pdf.pdf,Restricted,Scanned,US SSN@High,,A faxed (1-bit) PDF page
+4-Scans-and-pictures/scan-pasted-in-word.docx,Restricted,Scanned,US SSN@High,,A scan pasted into a Word document
+4-Scans-and-pictures/scan-pasted-in-excel.xlsx,Restricted,Scanned,US SSN@High,,A scan pasted into an Excel workbook
+4-Scans-and-pictures/scan-pasted-in-powerpoint.pptx,Restricted,Scanned,US SSN@High,,A scan pasted into a PowerPoint slide
+4-Scans-and-pictures/picture-no-text.png,Internal,Scanned,,any,A picture with no text
+5-Wrong-or-no-extension/spreadsheet-named-as-photo.jpg,Restricted,Scanned,US SSN@High,,An Excel workbook renamed to .jpg
+5-Wrong-or-no-extension/word-document-no-extension,Restricted,Scanned,US SSN@High,,A Word document with no extension
+5-Wrong-or-no-extension/pdf-named.tmp,Restricted,Scanned,US SSN@High,,A PDF with a .tmp name
+5-Wrong-or-no-extension/export.dat,Restricted,Scanned,US SSN@High,,Text in a file with an unknown extension
+5-Wrong-or-no-extension/payroll.csv.bak,Restricted,Scanned,US SSN@High,,A backup copy (.bak)
+6-Reported-as-not-read/password-protected.zip,Unknown,Encrypted,,,A password-protected zip
+6-Reported-as-not-read/password-protected.7z,Unknown,Unreadable,,,"A 7-Zip archive with encrypted files and a program: nothing could be read, and the note counts both reasons"
+6-Reported-as-not-read/password-protected-names.7z,Unknown,Encrypted,,,A 7-Zip archive whose file names are encrypted too
+6-Reported-as-not-read/password-protected.docx,Unknown,Encrypted,,,A password-protected Word document
+6-Reported-as-not-read/password-protected.xlsx,Unknown,Encrypted,,,A password-protected Excel workbook
+6-Reported-as-not-read/damaged.docx,Unknown,Unreadable,,,A Word document cut short (as after a failed copy)
+6-Reported-as-not-read/damaged.pdf,Unknown,Unreadable,,,A damaged PDF
+6-Reported-as-not-read/zip-bomb.zip,Internal,Partial,,,"A zip bomb: 1 MB that would unpack to 1 GB. Only the start is read, and the scan says so"
+6-Reported-as-not-read/zips-nested-six-deep.zip,Restricted,Partial,US SSN@High,,Zips nested six deep: the outer levels are read and the scan says the deepest were not
+6-Reported-as-not-read/setup.exe,Unknown,Unsupported,,,A program: never opened
+6-Reported-as-not-read/backup.iso,Unknown,Unsupported,,,A disk image: never opened
+6-Reported-as-not-read/training-video.mp4,Unknown,Unsupported,,,A video: never opened
+6-Reported-as-not-read/export.csv.gz,Unknown,Unsupported,,,"A gzip file: named, not unpacked yet"
+6-Reported-as-not-read/database.sqlite,Unknown,Unsupported,,,"A database file: named, not read"
+6-Reported-as-not-read/empty.txt,Internal,Scanned,,any,"An empty file: read, nothing found"

@@ -1,0 +1,36 @@
+# Build outputs
+**/bin/
+**/obj/
+node_modules/
+dist/
+coverage/
+TestResults/
+*.user
+*.suo
+.vs/
+# Local secrets and config
+.env
+.env.*
+!.env.example
+appsettings.Development.local.json
+*.pfx
+*.p12
+*.key
+*.pem
+*.secrets.json
+# Databases/backups/diagnostics
+*.db
+*.sqlite
+*.bak
+*.dump
+*.log
+*.dmp
+# Synthetic fixture outputs
+scratch/
+
+# Synthetic lab file server (scripts/make-lab.mjs)
+lab-data/
+artifacts/
+
+# The detection test pack keeps every file it tests, including .pem, .log, .bak and .sqlite (all synthetic).
+!tests/test-pack/files/**

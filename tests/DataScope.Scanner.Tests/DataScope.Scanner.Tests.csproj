@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\DataScope.Scanner\DataScope.Scanner.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" PrivateAssets="all" />
+  </ItemGroup>
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Synthetic images for the OCR tests, made by scripts/make-ocr-fixtures.py. -->
+    <None Include="Content/Fixtures/ocr/*" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Synthetic older Office files and archives, made by scripts/make-legacy-fixtures.py. -->
+    <None Include="Content/Fixtures/legacy/*" CopyToOutputDirectory="PreserveNewest" />
+    <!-- The detection test pack (D138), made by scripts/make-test-pack.py and TestPackTests. -->
+    <None Include="../test-pack/**/*" LinkBase="test-pack" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>
