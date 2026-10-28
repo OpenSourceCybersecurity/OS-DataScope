@@ -674,9 +674,13 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           ls -l dist
-          prerelease=""
-          case "$TAG" in v0.*|*-*) prerelease="--prerelease" ;; esac
-          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Data Scope $TAG" --generate-notes $prerelease \
-            dist/DataScope-Setup-*.exe dist/DataScope-Setup-*.exe.sha256 \
-            dist/DataScope-*.zip dist/DataScope-*.zip.sha256 \
-            dist/Prepare-DataScopeDomain.ps1 dist/Enable-DataScopeAuditing.ps1
+          files=(dist/DataScope-Setup-*.exe dist/DataScope-Setup-*.exe.sha256 dist/DataScope-*.zip dist/DataScope-*.zip.sha256
+                 dist/Prepare-DataScopeDomain.ps1 dist/Enable-DataScopeAuditing.ps1)
+          # A release made by hand on GitHub creates the tag; attach the files to it instead of making another.
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber "${files[@]}"
+          else
+            prerelease=""
+            case "$TAG" in v0.*|*-*) prerelease="--prerelease" ;; esac
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Data Scope $TAG" --generate-notes $prerelease "${files[@]}"
+          fi
