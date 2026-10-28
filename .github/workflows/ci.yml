@@ -13,6 +13,8 @@ on:
       - "THIRD-PARTY-NOTICES.md"
   push:
     branches: [main]
+    # A version tag such as v1.0.0 builds, tests and publishes a GitHub Release (path filters don't apply to tags).
+    tags: ["v*.*.*"]
     paths: *code
   # Runs everything, the Windows jobs included, on any branch when started by hand from the Actions tab.
   workflow_dispatch:
@@ -25,6 +27,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  # Tagged builds carry the tag's version; others are lab builds numbered by run.
+  DS_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('0.2.0-lab.{0}', github.run_number) }}
   DOTNET_NOLOGO: "1"
   DOTNET_CLI_TELEMETRY_OPTOUT: "1"
 
@@ -144,7 +148,7 @@ jobs:
           path: artifacts/cache
           key: windows-dependencies-${{ hashFiles('scripts/windows-dependencies.env') }}
       - name: Build the package
-        run: scripts/package.sh "0.2.0-lab.${{ github.run_number }}"
+        run: scripts/package.sh "${DS_VERSION#v}"
       - uses: actions/upload-artifact@v4
         with:
           name: DataScope-windows-package
@@ -166,7 +170,7 @@ jobs:
           retention-days: 30
           compression-level: 0
       - name: Build the detection test pack for a lab
-        run: scripts/package-test-pack.sh "0.2.0-lab.${{ github.run_number }}"
+        run: scripts/package-test-pack.sh "${DS_VERSION#v}"
       - uses: actions/upload-artifact@v4
         with:
           name: DataScope-test-pack
@@ -651,3 +655,28 @@ jobs:
           Get-ChildItem "$env:ProgramData\DataScope\database\log" -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "--- $($_.Name)"; Get-Content $_.FullName -Tail 80 }
           Get-EventLog -LogName Application -Source 'Data Scope*', 'PostgreSQL' -Newest 60 -ErrorAction SilentlyContinue | Format-List TimeGenerated, Source, EntryType, Message
           Get-ChildItem "$env:ProgramData\DataScope\logs" -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "--- $($_.Name)"; Get-Content $_.FullName }
+
+  release:
+    name: Publish the GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [web, dotnet-linux, dotnet-windows, package, install-test, setup-test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create the release with the installer attached
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          ls -l dist
+          prerelease=""
+          case "$TAG" in v0.*|*-*) prerelease="--prerelease" ;; esac
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Data Scope $TAG" --generate-notes $prerelease \
+            dist/DataScope-Setup-*.exe dist/DataScope-Setup-*.exe.sha256 \
+            dist/DataScope-*.zip dist/DataScope-*.zip.sha256 \
+            dist/Prepare-DataScopeDomain.ps1 dist/Enable-DataScopeAuditing.ps1

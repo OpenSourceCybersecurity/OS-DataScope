@@ -17,9 +17,11 @@ In the commands below, replace `YOURDOMAIN` with your domain's short name and `y
 
 ## 1. Download
 
-1. On GitHub, open **OpenSourceCybersecurity/OS-DataScope**, then **Actions**, then the latest green **CI** run.
-2. Under **Artifacts**, download **DataScope-Setup**. It holds `DataScope-Setup-<version>.exe`, its `.sha256` file and two helper scripts.
+1. On GitHub, open **OpenSourceCybersecurity/OS-DataScope**, then **Releases**, and open the latest release.
+2. Download `DataScope-Setup-<version>.exe`, its `.sha256` file, `Prepare-DataScopeDomain.ps1` and `Enable-DataScopeAuditing.ps1`.
 3. Copy them to `C:\Install` on ds01.
+
+For the newest build between releases, open **Actions**, the latest green **CI** run, and download **DataScope-Setup** under **Artifacts**.
 
 ## 2. Create the accounts (on dc01)
 
